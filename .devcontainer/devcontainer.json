@@ -1,0 +1,54 @@
+{
+  "name": "BlueZ Bluetooth Development",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      // Set these to match your host user's UID and GID
+      // Run 'id -u' and 'id -g' on your host to find these values
+      "USER_UID": "1000",
+      "USER_GID": "1000",
+      // Set this to your host's bluetooth group GID
+      // Run 'getent group bluetooth | cut -d: -f3' on your host
+      "BLUETOOTH_GID": "113"
+    }
+  },
+
+  // Add Linux capabilities required for Bluetooth operations
+  "capAdd": [
+    "NET_ADMIN",
+    "NET_RAW"
+  ],
+
+  // Disable AppArmor to allow D-Bus system bus access
+  "runArgs": [
+    "--security-opt", "apparmor=unconfined"
+  ],
+
+  // Mount the host's D-Bus system socket for BlueZ communication
+  "mounts": [
+    "source=/run/dbus,target=/run/dbus,type=bind,readonly"
+  ],
+
+  // Use the non-root user created in Dockerfile
+  "remoteUser": "vscode",
+
+  // Set D-Bus environment variable (usually auto-detected, but explicit is safer)
+  "containerEnv": {
+    "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/dbus/system_bus_socket"
+  },
+
+  // VS Code customizations
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // Features (optional - adds common development tools)
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  }
+}
