@@ -20,8 +20,11 @@
   ],
 
   // Disable AppArmor to allow D-Bus system bus access
+  // + Use host networking so codex's localhost:1455 callback
+  //   is reachable from your host browser
   "runArgs": [
-    "--security-opt", "apparmor=unconfined"
+    "--security-opt", "apparmor=unconfined",
+    "--network=host"
   ],
 
   // Mount the host's D-Bus system socket for BlueZ communication
@@ -40,8 +43,23 @@
   // VS Code customizations
   "customizations": {
     "vscode": {
+      "extensions": [
+        "yzhang.markdown-all-in-one",
+        "davidanson.vscode-markdownlint",
+        "redhat.vscode-yaml",
+        "anthropic.claude-code",
+        "openai.codex"
+      ],
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
+        "terminal.integrated.defaultProfile.linux": "bash",
+
+        // Codex settings copied from Life Cockpit
+        "codex.model": "gpt-5-codex",
+        "codex.reasoningEffort": "medium",
+        "codex.defaultMode": "agent",
+        "codex.enableAutoContext": true,
+        "codex.allowFileEdits": true,
+        "codex.allowTerminalCommands": "ask"
       }
     }
   },
@@ -50,5 +68,8 @@
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
-  }
+  },
+
+  // Sanity check: ensure CLIs are installed and accessible
+  "postCreateCommand": "mkdir -p ~/.claude && claude --version && mkdir -p ~/.codex && codex --version"
 }

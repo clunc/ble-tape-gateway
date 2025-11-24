@@ -1,7 +1,6 @@
 FROM debian:bullseye-slim
 
-# Install BlueZ and D-Bus client libraries
-# Note: We don't run bluetoothd in the container - we use the host's daemon via D-Bus
+# Install BlueZ, D-Bus client libraries, and tools needed for Node/Codex
 RUN apt-get update && apt-get install -y \
     bluez \
     bluetooth \
@@ -9,6 +8,15 @@ RUN apt-get update && apt-get install -y \
     libudev-dev \
     dbus \
     libdbus-1-dev \
+    curl \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 (NodeSource) and the Claude/Codex CLIs
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get update \
+    && apt-get install -y nodejs \
+    && npm install -g @anthropic-ai/claude-code @openai/codex \
     && rm -rf /var/lib/apt/lists/*
 
 # Build arguments for user/group configuration
@@ -33,6 +41,10 @@ RUN usermod -aG ${BLUETOOTH_GID} vscode
 
 # Fix permissions on home directory
 RUN chown -R ${USER_UID}:${USER_GID} /home/vscode
+
+# Give vscode passwordless sudo (handy for dev, matches Life Cockpit style)
+RUN echo "vscode ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/vscode \
+    && chmod 0440 /etc/sudoers.d/vscode
 
 # Create a D-Bus policy file for development
 # This ensures the bluetooth group has proper permissions
