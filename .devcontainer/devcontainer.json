@@ -23,7 +23,8 @@
   // + Use host networking so codex's localhost:1455 callback
   //   is reachable from your host browser
   "runArgs": [
-    "--security-opt", "apparmor=unconfined",
+    "--security-opt",
+    "apparmor=unconfined",
     "--network=host"
   ],
 
@@ -71,5 +72,6 @@
   },
 
   // Sanity check: ensure CLIs are installed and accessible
-  "postCreateCommand": "mkdir -p ~/.claude && claude --version && mkdir -p ~/.codex && codex --version"
+  // Also mark /workspace (the repo root) as safe for git inside the container
+  "postCreateCommand": "mkdir -p ~/.claude && claude --version && mkdir -p ~/.codex && codex --version && git config --global --add safe.directory /workspace || true"
 }
