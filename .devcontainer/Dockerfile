@@ -1,6 +1,6 @@
 FROM debian:bullseye-slim
 
-# Install BlueZ, D-Bus client libraries, and tools needed for Node/Codex
+# Install BlueZ, D-Bus client libraries, git/ssh, and tools needed for Node/Codex
 RUN apt-get update && apt-get install -y \
     bluez \
     bluetooth \
@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     libdbus-1-dev \
     curl \
     sudo \
+    git \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 (NodeSource) and the Claude/Codex CLIs

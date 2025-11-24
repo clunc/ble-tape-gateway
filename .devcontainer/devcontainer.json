@@ -29,10 +29,12 @@
   ],
 
   // Mount the host's D-Bus system socket for BlueZ communication
-  // + mount the host ssh-agent socket so we can use the same SSH keys
+  // + ssh-agent socket
+  // + host git config as the container user's gitconfig
   "mounts": [
     "source=/run/dbus,target=/run/dbus,type=bind,readonly",
-    "source=${env:SSH_AUTH_SOCK},target=/ssh-agent,type=bind"
+    "source=${env:SSH_AUTH_SOCK},target=/ssh-agent,type=bind",
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind"
   ],
 
   // Use the non-root user created in Dockerfile
@@ -76,6 +78,5 @@
   },
 
   // Sanity check: ensure CLIs are installed and accessible
-  // Also mark /workspace (the repo root) as safe for git inside the container
-  "postCreateCommand": "mkdir -p ~/.claude && claude --version && mkdir -p ~/.codex && codex --version && git config --global --add safe.directory /workspace || true"
+  "postCreateCommand": "mkdir -p ~/.claude && claude --version && mkdir -p ~/.codex && codex --version"
 }
