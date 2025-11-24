@@ -29,16 +29,20 @@
   ],
 
   // Mount the host's D-Bus system socket for BlueZ communication
+  // + mount the host ssh-agent socket so we can use the same SSH keys
   "mounts": [
-    "source=/run/dbus,target=/run/dbus,type=bind,readonly"
+    "source=/run/dbus,target=/run/dbus,type=bind,readonly",
+    "source=${env:SSH_AUTH_SOCK},target=/ssh-agent,type=bind"
   ],
 
   // Use the non-root user created in Dockerfile
   "remoteUser": "vscode",
 
-  // Set D-Bus environment variable (usually auto-detected, but explicit is safer)
+  // Set environment variables in the container
   "containerEnv": {
-    "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/dbus/system_bus_socket"
+    "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/dbus/system_bus_socket",
+    // Point ssh in the container to the forwarded agent socket
+    "SSH_AUTH_SOCK": "/ssh-agent"
   },
 
   // VS Code customizations
