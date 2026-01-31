@@ -3,64 +3,52 @@
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
-      // Set these to match your host user's UID and GID
-      // Run 'id -u' and 'id -g' on your host to find these values
       "USER_UID": "1000",
       "USER_GID": "1000",
-      // Set this to your host's bluetooth group GID
-      // Run 'getent group bluetooth | cut -d: -f3' on your host
       "BLUETOOTH_GID": "113"
     }
   },
 
-  // Add Linux capabilities required for Bluetooth operations
   "capAdd": [
     "NET_ADMIN",
     "NET_RAW"
   ],
 
-  // Disable AppArmor to allow D-Bus system bus access
-  // + Use host networking so codex's localhost:1455 callback
-  //   is reachable from your host browser
   "runArgs": [
     "--security-opt",
     "apparmor=unconfined",
-    "--network=host"
+    "--security-opt",
+    "seccomp=unconfined",
+    "--network=host",
+    "--device",
+    "/dev/bus/usb"
   ],
 
-  // Mount the host's D-Bus system socket for BlueZ communication
-  // + ssh-agent socket
-  // + host git config as the container user's gitconfig
   "mounts": [
     "source=/run/dbus,target=/run/dbus,type=bind,readonly",
     "source=${env:SSH_AUTH_SOCK},target=/ssh-agent,type=bind",
     "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind"
   ],
 
-  // Use the non-root user created in Dockerfile
   "remoteUser": "vscode",
 
-  // Set environment variables in the container
   "containerEnv": {
     "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/dbus/system_bus_socket",
-    // Point ssh in the container to the forwarded agent socket
     "SSH_AUTH_SOCK": "/ssh-agent"
   },
 
-  // VS Code customizations
   "customizations": {
     "vscode": {
       "extensions": [
         "yzhang.markdown-all-in-one",
         "davidanson.vscode-markdownlint",
         "redhat.vscode-yaml",
+        "golang.go",
         "anthropic.claude-code",
         "openai.codex"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
-
-        // Codex settings copied from Life Cockpit
         "codex.model": "gpt-5-codex",
         "codex.reasoningEffort": "medium",
         "codex.defaultMode": "agent",
@@ -71,12 +59,10 @@
     }
   },
 
-  // Features (optional - adds common development tools)
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 
-  // Sanity check: ensure CLIs are installed and accessible
   "postCreateCommand": "mkdir -p ~/.claude && claude --version && mkdir -p ~/.codex && codex --version"
 }

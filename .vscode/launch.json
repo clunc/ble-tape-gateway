@@ -1,0 +1,37 @@
+{
+	// Debug configurations for the BLE tape gateway.
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Gateway (simulated)",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/gateway",
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"GATEWAY_SIMULATED": "true",
+				"GATEWAY_DEVICE_ID": "tape-001",
+				"GATEWAY_SAMPLE_INTERVAL": "1s",
+				"GATEWAY_PUBLISH_MODE": "log"
+			}
+		},
+		{
+			"name": "Gateway (hardware)",
+			"type": "go",
+			"request": "launch",
+			"mode": "debug",
+			"program": "${workspaceFolder}/cmd/gateway",
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"GOCACHE": "${workspaceFolder}/.gocache",
+				"GATEWAY_SIMULATED": "false",
+				"GATEWAY_DEVICE_ID": "tape-001",
+				"GATEWAY_DEVICE_NAME": "ES-Tape",
+				"GATEWAY_DEVICE_MAC": "D0:3E:7D:7A:5A:94",
+				"GATEWAY_ACCEPT_LIVE_MEASUREMENTS": "false",
+				"GATEWAY_PUBLISH_MODE": "log"
+			}
+		}
+	]
+}

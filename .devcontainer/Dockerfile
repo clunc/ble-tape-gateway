@@ -6,9 +6,12 @@ RUN apt-get update && apt-get install -y \
     bluetooth \
     libbluetooth-dev \
     libudev-dev \
+    build-essential \
+    libcap2-bin \
     dbus \
     libdbus-1-dev \
     curl \
+    ca-certificates \
     sudo \
     git \
     openssh-client \
@@ -20,6 +23,18 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g @anthropic-ai/claude-code @openai/codex \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Go (official tarball)
+ARG GO_VERSION=1.22.5
+RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz -o /tmp/go.tgz \
+    && rm -rf /usr/local/go \
+    && tar -C /usr/local -xzf /tmp/go.tgz \
+    && rm /tmp/go.tgz
+
+# Go env for all users
+ENV GOROOT=/usr/local/go
+ENV GOPATH=/home/vscode/go
+ENV PATH="${PATH}:/usr/local/go/bin:/home/vscode/go/bin"
 
 # Build arguments for user/group configuration
 # These should be passed from devcontainer.json to match host credentials
@@ -66,6 +81,10 @@ RUN echo '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuratio
 
 # Switch to non-root user
 USER vscode
+
+# Install Delve for debugging
+RUN /usr/local/go/bin/go install -v github.com/go-delve/delve/cmd/dlv@latest
+RUN sudo setcap 'cap_net_raw,cap_net_admin+eip' /home/vscode/go/bin/dlv
 
 # Set working directory
 WORKDIR /workspace
