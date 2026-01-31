@@ -11,10 +11,11 @@ import (
 	"ble-tape-gateway/internal/config"
 	"ble-tape-gateway/internal/events"
 	"ble-tape-gateway/internal/gateway"
+	"ble-tape-gateway/internal/logutil"
 )
 
 func main() {
-	logger := log.New(os.Stdout, "[main] ", log.LstdFlags|log.Lmsgprefix)
+	logger := logutil.New("[main] ", os.Stdout)
 	cfg := config.FromEnv()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

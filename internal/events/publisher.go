@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ble-tape-gateway/internal/ble"
+	"ble-tape-gateway/internal/logutil"
 )
 
 // Publisher emits measurements to downstream systems (logs, message bus, HTTP, etc).
@@ -22,7 +23,7 @@ type LogPublisher struct {
 
 func NewLogPublisher(logger *log.Logger) *LogPublisher {
 	if logger == nil {
-		logger = log.New(os.Stdout, "[publisher] ", log.LstdFlags|log.Lmsgprefix)
+		logger = logutil.New("[publisher] ", os.Stdout)
 	}
 	return &LogPublisher{logger: logger}
 }
