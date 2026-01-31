@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"tinygo.org/x/bluetooth"
+
+	"ble-tape-gateway/internal/logutil"
 )
 
 // DSPSClient connects to the Renpho RF-BMF01 tape measure over Dialog's DSPS service.
@@ -29,7 +31,7 @@ type DSPSClient struct {
 // NewDSPSClient builds a BLE client that listens for DSPS notifications from the tape measure.
 func NewDSPSClient(deviceID, deviceName, deviceMAC string, acceptLiveMetrics bool, logger *log.Logger) *DSPSClient {
 	if logger == nil {
-		logger = log.New(os.Stdout, "[ble] ", log.LstdFlags|log.Lmsgprefix)
+		logger = logutil.New("[ble] ", os.Stdout)
 	}
 	return &DSPSClient{
 		deviceID:          deviceID,
@@ -216,6 +218,9 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 
 	decode := func(data []byte) {
 		c.logger.Printf("notify payload (len=%d data=%x)", len(data), data)
+		// Treat every notification as activity so the session's inactivity timer does not fire
+		// while the device is continuously streaming unconfirmed measurements.
+		nonBlockingSend(errs, nil)
 		decoded, decodeErr := DecodeDSPSPacket(data)
 		if decodeErr != nil {
 			// Log and continue so we can inspect malformed notifications without tearing down the session.
@@ -275,6 +280,12 @@ func (c *DSPSClient) clearCancel() {
 }
 
 func nonBlockingSend(errs chan<- error, err error) {
+	defer func() {
+		// Channel may be closed if the stream is shutting down; ignore panics from send.
+		if r := recover(); r != nil {
+			// intentionally swallow
+		}
+	}()
 	select {
 	case errs <- err:
 	default:
