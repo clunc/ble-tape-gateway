@@ -59,10 +59,5 @@
     }
   },
 
-  "features": {
-    "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {}
-  },
-
   "postCreateCommand": "mkdir -p ~/.claude && claude --version && mkdir -p ~/.codex && codex --version"
 }

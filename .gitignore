@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# Built binaries
+bin/
+__debug_bin*
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -24,14 +28,15 @@ profile.cov
 go.work
 go.work.sum
 .cache
-.gocache
+.gocache/
 
 # env file
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
 
 # Analysis artifacts
-analysis/data/logs.txt
+analysis/data/*
+!analysis/data/.gitkeep
