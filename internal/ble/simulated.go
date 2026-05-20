@@ -12,8 +12,9 @@ type SimulatedClient struct {
 	deviceID string
 	interval time.Duration
 	source   *rand.Rand
-	stop     chan struct{}
-	once     sync.Once
+
+	mu     sync.Mutex
+	cancel context.CancelFunc
 }
 
 // NewSimulatedClient builds a client that produces sample measurements for local development.
@@ -26,19 +27,25 @@ func NewSimulatedClient(deviceID string, interval time.Duration) *SimulatedClien
 		deviceID: deviceID,
 		interval: interval,
 		source:   rand.New(rand.NewSource(time.Now().UnixNano())),
-		stop:     make(chan struct{}),
 	}
 }
 
 func (c *SimulatedClient) Stream(ctx context.Context) (<-chan Measurement, <-chan error, error) {
+	c.mu.Lock()
+	streamCtx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+	c.mu.Unlock()
+
 	measurements := make(chan Measurement)
 	errs := make(chan error, 1)
 
 	go func() {
-		ticker := time.NewTicker(c.interval)
-		defer ticker.Stop()
+		defer cancel()
 		defer close(measurements)
 		defer close(errs)
+
+		ticker := time.NewTicker(c.interval)
+		defer ticker.Stop()
 
 		for {
 			select {
@@ -48,9 +55,7 @@ func (c *SimulatedClient) Stream(ctx context.Context) (<-chan Measurement, <-cha
 					CircumferenceMM: 1000 + c.source.NormFloat64()*5,
 					Timestamp:       time.Now().UTC(),
 				}
-			case <-ctx.Done():
-				return
-			case <-c.stop:
+			case <-streamCtx.Done():
 				return
 			}
 		}
@@ -60,8 +65,11 @@ func (c *SimulatedClient) Stream(ctx context.Context) (<-chan Measurement, <-cha
 }
 
 func (c *SimulatedClient) Close() error {
-	c.once.Do(func() {
-		close(c.stop)
-	})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
 	return nil
 }
