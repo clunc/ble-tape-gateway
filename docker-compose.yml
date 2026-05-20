@@ -1,7 +1,7 @@
 services:
 
   redpanda:
-    image: redpandadata/redpanda:latest
+    image: redpandadata/redpanda:v26.1.8
     command:
       - redpanda
       - start
@@ -20,7 +20,7 @@ services:
       retries: 10
 
   redpanda-init:
-    image: redpandadata/redpanda:latest
+    image: redpandadata/redpanda:v26.1.8
     depends_on:
       redpanda:
         condition: service_healthy
