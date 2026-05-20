@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -81,7 +82,15 @@ func (s *sessionFSM) run(ctx context.Context) error {
 				s.transition(stateStopping)
 				return ctx.Err()
 			}
-			delay := s.bo.next()
+			// Scan timeout just means the tape isn't advertising yet — retry
+			// quickly. Real BLE errors use exponential backoff to let the
+			// adapter settle.
+			var delay time.Duration
+			if errors.Is(err, ble.ErrScanTimeout) {
+				delay = 1 * time.Second
+			} else {
+				delay = s.bo.next()
+			}
 			s.logger.Printf("stream start failed: %v; retrying in %s", err, delay)
 			s.transition(stateDisconnected)
 			if err := s.client.Close(); err != nil {

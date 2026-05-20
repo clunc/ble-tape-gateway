@@ -75,6 +75,11 @@ func (c *DSPSClient) Stream(ctx context.Context) (<-chan Measurement, <-chan err
 	return measurements, errs, nil
 }
 
+// ErrScanTimeout is returned when no device is found within the scan window.
+// It signals "device not advertising" rather than a BLE stack failure, so
+// callers should retry quickly rather than applying exponential backoff.
+var ErrScanTimeout = errors.New("scan timeout")
+
 var (
 	parsedDSPSServiceUUID    = mustParseUUID(dspsServiceUUID)
 	parsedDSPSNotifyCharUUID = mustParseUUID(dspsNotifyCharUUID)
@@ -174,10 +179,10 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		waitScanDone()
 		sendStarted(err)
 		return fmt.Errorf("scan: %w", err)
-	case <-time.After(30 * time.Second):
+	case <-time.After(10 * time.Second):
 		stop()
 		waitScanDone()
-		err := errors.New("scan timeout: device not found within 30s")
+		err := fmt.Errorf("%w: device not found within 10s", ErrScanTimeout)
 		sendStarted(err)
 		return err
 	case target = <-foundCh:
