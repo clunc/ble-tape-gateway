@@ -284,14 +284,14 @@ func handleQueryMeasurements(db *sql.DB) http.HandlerFunc {
 				`SELECT id, body_part, circumference_mm, recorded_at
 				   FROM measurements
 				  WHERE recorded_at >= ? AND recorded_at <= ? AND body_part = ?
-				  ORDER BY recorded_at ASC LIMIT 1000`,
+				  ORDER BY recorded_at ASC`,
 				fromMs, toMs, bodyPart)
 		} else {
 			rows, err = db.QueryContext(r.Context(),
 				`SELECT id, body_part, circumference_mm, recorded_at
 				   FROM measurements
 				  WHERE recorded_at >= ? AND recorded_at <= ?
-				  ORDER BY recorded_at ASC LIMIT 1000`,
+				  ORDER BY recorded_at ASC`,
 				fromMs, toMs)
 		}
 		if err != nil {
