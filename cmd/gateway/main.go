@@ -47,6 +47,17 @@ func buildClient(cfg config.Config, logger *log.Logger) ble.Client {
 
 func buildPublisher(cfg config.Config, logger *log.Logger) events.Publisher {
 	switch cfg.PublishMode {
+	case "redpanda", "kafka":
+		addr := cfg.PublishEndpoint
+		if addr == "" {
+			addr = "redpanda:9092"
+		}
+		p, err := events.NewRedpandaPublisher(addr)
+		if err != nil {
+			logger.Fatalf("redpanda publisher: %v", err)
+		}
+		logger.Printf("publishing to redpanda at %s", addr)
+		return p
 	case "", "log":
 		return events.NewLogPublisher(logger)
 	default:
