@@ -89,6 +89,8 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	}
 
 	adapter := bluetooth.DefaultAdapter
+	// Clear any stale scan left over from a previous attempt.
+	_ = adapter.StopScan()
 	if err := adapter.Enable(); err != nil {
 		sendStarted(err)
 		hint := ""
@@ -114,7 +116,9 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		})
 	}
 
+	scanDone := make(chan struct{})
 	go func() {
+		defer close(scanDone)
 		if err := adapter.Scan(func(a *bluetooth.Adapter, result bluetooth.ScanResult) {
 			if ctx.Err() != nil {
 				stop()
@@ -144,19 +148,34 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		}
 	}()
 
+	waitScanDone := func() {
+		select {
+		case <-scanDone:
+		case <-time.After(3 * time.Second):
+			c.logger.Printf("warning: scan goroutine did not exit within 3s")
+		}
+	}
+
 	var target bluetooth.ScanResult
 	select {
 	case <-ctx.Done():
 		stop()
+		waitScanDone()
 		sendStarted(ctx.Err())
 		return ctx.Err()
 	case err := <-scanErr:
-		stop()
+		waitScanDone()
 		sendStarted(err)
 		return fmt.Errorf("scan: %w", err)
+	case <-time.After(30 * time.Second):
+		stop()
+		waitScanDone()
+		err := errors.New("scan timeout: device not found within 30s")
+		sendStarted(err)
+		return err
 	case target = <-foundCh:
 	}
-	stop()
+	waitScanDone()
 
 	targetName := target.LocalName()
 	if targetName == "" {
@@ -197,24 +216,17 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		return fmt.Errorf("service %s not found", dspsServiceUUID)
 	}
 
-	allChars, err := services[0].DiscoverCharacteristics(nil)
+	allChars, err := services[0].DiscoverCharacteristics([]bluetooth.UUID{parsedDSPSNotifyCharUUID})
 	if err != nil {
 		sendStarted(err)
 		return fmt.Errorf("discover characteristics: %w", err)
 	}
-	charUUIDs := make([]string, 0, len(allChars))
-	var notifyChar *bluetooth.DeviceCharacteristic
-	for i := range allChars {
-		charUUIDs = append(charUUIDs, strings.ToUpper(allChars[i].UUID().String()))
-		if allChars[i].UUID() == parsedDSPSNotifyCharUUID {
-			notifyChar = &allChars[i]
-		}
-	}
-	c.logger.Printf("discovered service %s with characteristics %v", strings.ToUpper(services[0].UUID().String()), charUUIDs)
-	if notifyChar == nil {
+	c.logger.Printf("discovered service %s with %d characteristic(s)", strings.ToUpper(services[0].UUID().String()), len(allChars))
+	if len(allChars) == 0 {
 		sendStarted(errors.New("notify characteristic not found"))
 		return fmt.Errorf("notify characteristic %s not found", dspsNotifyCharUUID)
 	}
+	notifyChar := &allChars[0]
 
 	decode := func(data []byte) {
 		c.logger.Printf("notify payload (len=%d data=%x)", len(data), data)
