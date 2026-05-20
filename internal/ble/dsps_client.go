@@ -28,6 +28,7 @@ type DSPSClient struct {
 	mu             sync.Mutex
 	cancel         context.CancelFunc
 	adapterEnabled bool
+	knownAddress   *bluetooth.Address // set after first scan; allows scan-free reconnects
 }
 
 // NewDSPSClient builds a BLE client that listens for DSPS notifications from the tape measure.
@@ -102,14 +103,7 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	}
 
 	adapter := bluetooth.DefaultAdapter
-	// Clear any stale scan left over from a previous attempt.
 	_ = adapter.StopScan()
-	// Remove the device from BlueZ's cache so the next scan fires InterfacesAdded
-	// (BlueZ only fires that signal for unknown devices; cached ones only get a
-	// quiet PropertiesChanged that tinygo/bluetooth's scanner does not catch).
-	if c.deviceMAC != "" {
-		removeBlueZDevice(c.deviceMAC, c.logger)
-	}
 	if !c.adapterEnabled {
 		if err := adapter.Enable(); err != nil {
 			sendStarted(err)
@@ -122,98 +116,114 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		c.adapterEnabled = true
 	}
 
-	targetDesc := fmt.Sprintf("mac=%s", c.deviceMAC)
-	if c.deviceMAC == "" {
-		targetDesc = fmt.Sprintf("name=%q", c.deviceName)
-	}
-	c.logger.Printf("scanning for device (%s)", targetDesc)
-	foundCh := make(chan bluetooth.ScanResult, 1)
-	scanErr := make(chan error, 1)
-	var stopScan sync.Once
-	stop := func() {
-		stopScan.Do(func() {
-			if err := adapter.StopScan(); err != nil && !strings.Contains(err.Error(), "no scan in progress") {
-				c.logger.Printf("stop scan: %v", err)
-			}
-		})
-	}
+	var connectAddr bluetooth.Address
+	var connectName string
 
-	scanDone := make(chan struct{})
-	go func() {
-		defer close(scanDone)
-		if err := adapter.Scan(func(a *bluetooth.Adapter, result bluetooth.ScanResult) {
-			if ctx.Err() != nil {
+	if c.knownAddress != nil {
+		// Fast reconnect: device is already in BlueZ cache with GATT services intact.
+		// Skipping removeDevice+scan preserves the cache and cuts reconnect time by ~1.7s.
+		connectAddr = *c.knownAddress
+		connectName = c.deviceMAC
+		c.logger.Printf("reconnecting to known device %s (skipping scan)", c.deviceMAC)
+	} else {
+		// First connection: remove cached device so tinygo/bluetooth's scan sees
+		// InterfacesAdded (BlueZ only emits that for unknown devices).
+		if c.deviceMAC != "" {
+			removeBlueZDevice(c.deviceMAC, c.logger)
+		}
+
+		targetDesc := fmt.Sprintf("mac=%s", c.deviceMAC)
+		if c.deviceMAC == "" {
+			targetDesc = fmt.Sprintf("name=%q", c.deviceName)
+		}
+		c.logger.Printf("scanning for device (%s)", targetDesc)
+		foundCh := make(chan bluetooth.ScanResult, 1)
+		scanErr := make(chan error, 1)
+		var stopScan sync.Once
+		stop := func() {
+			stopScan.Do(func() {
+				if err := adapter.StopScan(); err != nil && !strings.Contains(err.Error(), "no scan in progress") {
+					c.logger.Printf("stop scan: %v", err)
+				}
+			})
+		}
+
+		scanDone := make(chan struct{})
+		go func() {
+			defer close(scanDone)
+			if err := adapter.Scan(func(a *bluetooth.Adapter, result bluetooth.ScanResult) {
+				if ctx.Err() != nil {
+					stop()
+					return
+				}
+				if c.deviceMAC != "" {
+					if !strings.EqualFold(result.Address.String(), c.deviceMAC) {
+						return
+					}
+				} else {
+					if !strings.EqualFold(result.LocalName(), c.deviceName) {
+						return
+					}
+					if !result.AdvertisementPayload.HasServiceUUID(parsedDSPSServiceUUID) {
+						return
+					}
+				}
+				select {
+				case foundCh <- result:
+				default:
+				}
 				stop()
-				return
+			}); err != nil && ctx.Err() == nil {
+				scanErr <- err
 			}
-			if c.deviceMAC != "" {
-				// Hard filter: only match explicit MAC.
-				if !strings.EqualFold(result.Address.String(), c.deviceMAC) {
-					return
-				}
-			} else {
-				if !strings.EqualFold(result.LocalName(), c.deviceName) {
-					return
-				}
-				if !result.AdvertisementPayload.HasServiceUUID(parsedDSPSServiceUUID) {
-					return
-				}
-			}
+		}()
 
+		waitScanDone := func() {
 			select {
-			case foundCh <- result:
-			default:
+			case <-scanDone:
+			case <-time.After(3 * time.Second):
+				c.logger.Printf("warning: scan goroutine did not exit within 3s")
 			}
-			stop()
-		}); err != nil && ctx.Err() == nil {
-			scanErr <- err
 		}
-	}()
 
-	waitScanDone := func() {
+		var target bluetooth.ScanResult
 		select {
-		case <-scanDone:
-		case <-time.After(3 * time.Second):
-			c.logger.Printf("warning: scan goroutine did not exit within 3s")
+		case <-ctx.Done():
+			stop()
+			waitScanDone()
+			sendStarted(ctx.Err())
+			return ctx.Err()
+		case err := <-scanErr:
+			waitScanDone()
+			sendStarted(err)
+			return fmt.Errorf("scan: %w", err)
+		case <-time.After(10 * time.Second):
+			stop()
+			waitScanDone()
+			err := fmt.Errorf("%w: device not found within 10s", ErrScanTimeout)
+			sendStarted(err)
+			return err
+		case target = <-foundCh:
+			go func() { <-scanDone }()
 		}
+
+		c.logDeviceInfo(target, "found target")
+		connectName = target.LocalName()
+		if connectName == "" {
+			connectName = "(unknown name)"
+		}
+		connectAddr = target.Address
+		c.knownAddress = &connectAddr
 	}
 
-	var target bluetooth.ScanResult
-	select {
-	case <-ctx.Done():
-		stop()
-		waitScanDone()
-		sendStarted(ctx.Err())
-		return ctx.Err()
-	case err := <-scanErr:
-		waitScanDone()
-		sendStarted(err)
-		return fmt.Errorf("scan: %w", err)
-	case <-time.After(10 * time.Second):
-		stop()
-		waitScanDone()
-		err := fmt.Errorf("%w: device not found within 10s", ErrScanTimeout)
-		sendStarted(err)
-		return err
-	case target = <-foundCh:
-		// Drain the scan goroutine in the background so connection setup starts
-		// immediately without waiting for BlueZ to confirm the scan stopped.
-		go func() { <-scanDone }()
-	}
-
-	targetName := target.LocalName()
-	if targetName == "" {
-		targetName = "(unknown name)"
-	}
-	c.logDeviceInfo(target, "found target")
-	c.logger.Printf("connecting to %s (%s)", targetName, target.Address.String())
+	c.logger.Printf("connecting to %s (%s)", connectName, connectAddr.String())
 
 	disconnected := make(chan struct{}, 1)
 	adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
 		if connected {
 			return
 		}
-		if device.Address == target.Address {
+		if device.Address == connectAddr {
 			select {
 			case disconnected <- struct{}{}:
 			default:
@@ -222,13 +232,14 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	})
 	defer adapter.SetConnectHandler(nil)
 
-	client, err := adapter.Connect(target.Address, bluetooth.ConnectionParams{})
+	client, err := adapter.Connect(connectAddr, bluetooth.ConnectionParams{})
 	if err != nil {
+		c.knownAddress = nil // force full scan next time if direct connect failed
 		sendStarted(err)
-		return fmt.Errorf("connect to %s: %w", targetName, err)
+		return fmt.Errorf("connect to %s: %w", connectName, err)
 	}
 	defer client.Disconnect()
-	c.logger.Printf("connected to %s", target.Address.String())
+	c.logger.Printf("connected to %s", connectAddr.String())
 
 	services, err := client.DiscoverServices([]bluetooth.UUID{parsedDSPSServiceUUID})
 	if err != nil {
