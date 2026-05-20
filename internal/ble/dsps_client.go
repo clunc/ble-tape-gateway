@@ -323,13 +323,24 @@ func mustParseUUID(value string) bluetooth.UUID {
 // the next Scan() call receives an InterfacesAdded signal (BlueZ only fires that
 // for devices it has not seen before; cached devices only emit PropertiesChanged,
 // which tinygo/bluetooth's scanner ignores).
+// Uses a private D-Bus connection to avoid interfering with the shared connection
+// that tinygo/bluetooth uses internally for its own scan state.
 func removeBlueZDevice(mac string, logger *log.Logger) {
-	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
-	conn, err := dbus.SystemBus()
+	conn, err := dbus.SystemBusPrivate()
 	if err != nil {
-		logger.Printf("dbus connect: %v", err)
+		logger.Printf("dbus private connect: %v", err)
 		return
 	}
+	defer conn.Close()
+	if err := conn.Auth(nil); err != nil {
+		logger.Printf("dbus auth: %v", err)
+		return
+	}
+	if err := conn.Hello(); err != nil {
+		logger.Printf("dbus hello: %v", err)
+		return
+	}
+	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
 	call := conn.Object("org.bluez", "/org/bluez/hci0").Call("org.bluez.Adapter1.RemoveDevice", 0, devPath)
 	if call.Err != nil && !strings.Contains(call.Err.Error(), "Does Not Exist") {
 		logger.Printf("remove cached device %s: %v", mac, call.Err)
