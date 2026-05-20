@@ -166,7 +166,7 @@ function connect() {
   es.onerror   = () => {
     setStatus(false);
     es.close();
-    setTimeout(connect, 3000);
+    setTimeout(connect, 1000);
   };
 }
 

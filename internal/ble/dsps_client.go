@@ -140,10 +140,22 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	})
 	defer adapter.SetConnectHandler(nil)
 
+	// BlueZ's internal connection timeout is ~40s. After a failed connect,
+	// reset the adapter to clear HCI state — this avoids accumulated state
+	// causing the next attempt to block for 40s as well. We do NOT call
+	// Device1.Disconnect (abort), which confuses the device firmware.
 	client, err := adapter.Connect(connectAddr, bluetooth.ConnectionParams{})
 	if err != nil {
-		sendStarted(err)
-		return fmt.Errorf("connect to %s: %w", connectName, err)
+		var retErr error
+		if strings.Contains(err.Error(), "le-connection-abort-by-local") {
+			// Reset HCI state so the next attempt starts clean.
+			c.resetAdapter()
+			retErr = fmt.Errorf("%w: connect: %v", ErrScanTimeout, err)
+		} else {
+			retErr = fmt.Errorf("connect to %s: %w", connectName, err)
+		}
+		sendStarted(retErr)
+		return retErr
 	}
 	defer client.Disconnect()
 	c.logger.Printf("connected to %s", connectName)
@@ -204,8 +216,17 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	}
 
 	if err := notifyChar.EnableNotifications(decode); err != nil {
-		sendStarted(err)
-		return fmt.Errorf("subscribe: %w", err)
+		var retErr error
+		// "Not Connected" means the device dropped the link between our connect and
+		// subscribe calls. Treat it like a scan timeout so the FSM retries in 1s
+		// rather than applying exponential backoff.
+		if strings.Contains(err.Error(), "Not Connected") {
+			retErr = fmt.Errorf("%w: subscribe: %v", ErrScanTimeout, err)
+		} else {
+			retErr = fmt.Errorf("subscribe: %w", err)
+		}
+		sendStarted(retErr)
+		return retErr
 	}
 	sendStarted(nil)
 	c.logger.Printf("subscribed for notifications on %s", dspsNotifyCharUUID)
@@ -256,15 +277,6 @@ func (c *DSPSClient) dbusScan(ctx context.Context) (bluetooth.Address, error) {
 		dbus.WithMatchInterface("org.freedesktop.DBus.Properties"),
 		dbus.WithMatchMember("PropertiesChanged"),
 	)
-
-	// If the device is already present in BlueZ's object manager, return immediately.
-	if targetPath != "" {
-		obj := conn.Object("org.bluez", dbus.ObjectPath(targetPath))
-		if _, err := obj.GetProperty("org.bluez.Device1.Address"); err == nil {
-			c.logger.Printf("device already in BlueZ cache, skipping scan")
-			return addrFromDevicePath(targetPath)
-		}
-	}
 
 	adapterObj := conn.Object("org.bluez", "/org/bluez/hci0")
 	if call := adapterObj.Call("org.bluez.Adapter1.StartDiscovery", 0); call.Err != nil {
@@ -409,6 +421,56 @@ func mustParseUUID(value string) bluetooth.UUID {
 		panic(fmt.Sprintf("invalid UUID %q: %v", value, err))
 	}
 	return uuid
+}
+
+// resetAdapter power-cycles the local BLE adapter via D-Bus to flush stale HCI
+// state after a failed connect. The GATT attribute files on disk are untouched,
+// so ServicesResolved is still fast on the next session. adapterEnabled is
+// cleared so run() calls adapter.Enable() again on the next attempt.
+func (c *DSPSClient) resetAdapter() {
+	c.logger.Printf("resetting BLE adapter to clear HCI state")
+	conn, err := dbus.SystemBusPrivate()
+	if err != nil {
+		c.logger.Printf("reset adapter dbus: %v", err)
+		return
+	}
+	defer conn.Close()
+	if err := conn.Auth(nil); err != nil {
+		return
+	}
+	if err := conn.Hello(); err != nil {
+		return
+	}
+	adapterObj := conn.Object("org.bluez", "/org/bluez/hci0")
+	adapterObj.Call("org.freedesktop.DBus.Properties.Set", 0,
+		"org.bluez.Adapter1", "Powered", dbus.MakeVariant(false))
+	time.Sleep(1 * time.Second)
+	adapterObj.Call("org.freedesktop.DBus.Properties.Set", 0,
+		"org.bluez.Adapter1", "Powered", dbus.MakeVariant(true))
+	c.adapterEnabled = false
+}
+
+// abortBluezConnect cancels an in-progress connection attempt by calling
+// Device1.Disconnect on a private D-Bus connection, causing the blocked
+// Device1.Connect call to return with le-connection-abort-by-local.
+func abortBluezConnect(mac string, logger *log.Logger) {
+	conn, err := dbus.SystemBusPrivate()
+	if err != nil {
+		logger.Printf("abort connect dbus: %v", err)
+		return
+	}
+	defer conn.Close()
+	if err := conn.Auth(nil); err != nil {
+		return
+	}
+	if err := conn.Hello(); err != nil {
+		return
+	}
+	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
+	call := conn.Object("org.bluez", devPath).Call("org.bluez.Device1.Disconnect", 0)
+	if call.Err != nil && !strings.Contains(call.Err.Error(), "not connected") {
+		logger.Printf("abort connect %s: %v", mac, call.Err)
+	}
 }
 
 // removeBlueZDevice removes the device from BlueZ's cache. Kept as a debugging
