@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tape Measure</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav>
+    <span class="nav-title">Tape Measure</span>
+    <div id="status" class="status disconnected">Connecting…</div>
+  </nav>
+
+  <main>
+
+    <div class="card selector-card">
+      <label for="body-part">Body part</label>
+      <select id="body-part">
+        <option value="" disabled>Loading…</option>
+      </select>
+    </div>
+
+    <div class="card reading-card">
+      <div class="reading-primary">
+        <span id="value">—</span><span class="unit">mm</span>
+      </div>
+      <div class="reading-secondary">
+        <span id="value-cm">—</span><span class="unit">cm</span>
+      </div>
+      <div class="reading-footer">
+        <span id="delta"></span>
+        <span id="timestamp" class="meta"></span>
+      </div>
+      <button id="log-btn" class="log-btn" disabled>Log</button>
+    </div>
+
+    <div id="log-section">
+      <div class="card log-card">
+        <table id="log">
+          <thead><tr><th>Time</th><th>Body part</th><th>mm</th><th>Δ mm</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
