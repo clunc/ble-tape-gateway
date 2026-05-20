@@ -52,7 +52,8 @@ func buildPublisher(cfg config.Config, logger *log.Logger) events.Publisher {
 		if addr == "" {
 			addr = "redpanda:9092"
 		}
-		p, err := events.NewRedpandaPublisher(addr)
+		srURL := os.Getenv("SCHEMA_REGISTRY_URL")
+		p, err := events.NewRedpandaPublisher(addr, srURL)
 		if err != nil {
 			logger.Fatalf("redpanda publisher: %v", err)
 		}

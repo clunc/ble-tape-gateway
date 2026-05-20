@@ -383,8 +383,13 @@ func consumeLoop(ctx context.Context, broker, topic string, db *sql.DB, hub *hub
 			continue
 		}
 		fetches.EachRecord(func(rec *kgo.Record) {
+			payload, err := measurepb.UnwrapConfluentWire(rec.Value)
+			if err != nil {
+				logger.Printf("unwrap: %v", err)
+				return
+			}
 			var m measurepb.Measurement
-			if err := measurepb.Unmarshal(rec.Value, &m); err != nil {
+			if err := measurepb.Unmarshal(payload, &m); err != nil {
 				logger.Printf("unmarshal: %v", err)
 				return
 			}

@@ -11,8 +11,10 @@ services:
       - --node-id 0
       - --kafka-addr PLAINTEXT://0.0.0.0:9092
       - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+      - --schema-registry-addr PLAINTEXT://0.0.0.0:8081
     ports:
       - "9092:9092"
+      - "8081:8081"
     healthcheck:
       test: ["CMD", "rpk", "cluster", "info", "--brokers", "localhost:9092"]
       interval: 5s
@@ -46,6 +48,7 @@ services:
       GATEWAY_ACCEPT_LIVE_MEASUREMENTS: "true"
       GATEWAY_PUBLISH_MODE: "redpanda"
       GATEWAY_PUBLISH_ENDPOINT: "redpanda:9092"
+      SCHEMA_REGISTRY_URL: "http://redpanda:8081"
       DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/run/dbus/system_bus_socket"
     cap_add:
       - NET_ADMIN
