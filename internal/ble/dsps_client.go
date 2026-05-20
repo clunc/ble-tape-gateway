@@ -272,14 +272,17 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 			return
 		}
 
-		select {
-		case measurements <- Measurement{
-			DeviceID:        c.deviceID,
-			CircumferenceMM: float64(decoded.CircumferenceMM),
-			Timestamp:       time.Now().UTC(),
-		}:
-		case <-ctx.Done():
-		}
+		func() {
+			defer func() { recover() }() // tinygo's notify goroutine may fire after close(measurements)
+			select {
+			case measurements <- Measurement{
+				DeviceID:        c.deviceID,
+				CircumferenceMM: float64(decoded.CircumferenceMM),
+				Timestamp:       time.Now().UTC(),
+			}:
+			case <-ctx.Done():
+			}
+		}()
 	}
 
 	if err := notifyChar.EnableNotifications(decode); err != nil {
