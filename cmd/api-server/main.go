@@ -234,6 +234,7 @@ func consumeLoop(ctx context.Context, broker, topic string, db *sql.DB, hub *hub
 		kgo.SeedBrokers(broker),
 		kgo.ConsumeTopics(topic),
 		kgo.ConsumerGroup("api-server"),
+		kgo.FetchMaxWait(200*time.Millisecond),
 	)
 	if err != nil {
 		logger.Fatalf("kafka consumer: %v", err)
