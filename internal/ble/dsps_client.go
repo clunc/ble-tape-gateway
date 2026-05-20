@@ -25,8 +25,9 @@ type DSPSClient struct {
 	acceptLiveMetrics bool
 	logger            *log.Logger
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	mu             sync.Mutex
+	cancel         context.CancelFunc
+	adapterEnabled bool
 }
 
 // NewDSPSClient builds a BLE client that listens for DSPS notifications from the tape measure.
@@ -103,13 +104,16 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	if c.deviceMAC != "" {
 		removeBlueZDevice(c.deviceMAC, c.logger)
 	}
-	if err := adapter.Enable(); err != nil {
-		sendStarted(err)
-		hint := ""
-		if strings.Contains(err.Error(), "operation not permitted") {
-			hint = " (ensure bluetoothd is running and the process can access the adapter)"
+	if !c.adapterEnabled {
+		if err := adapter.Enable(); err != nil {
+			sendStarted(err)
+			hint := ""
+			if strings.Contains(err.Error(), "operation not permitted") {
+				hint = " (ensure bluetoothd is running and the process can access the adapter)"
+			}
+			return fmt.Errorf("enable BLE adapter%s: %w", hint, err)
 		}
-		return fmt.Errorf("enable BLE adapter%s: %w", hint, err)
+		c.adapterEnabled = true
 	}
 
 	targetDesc := fmt.Sprintf("mac=%s", c.deviceMAC)
@@ -186,8 +190,10 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		sendStarted(err)
 		return err
 	case target = <-foundCh:
+		// Drain the scan goroutine in the background so connection setup starts
+		// immediately without waiting for BlueZ to confirm the scan stopped.
+		go func() { <-scanDone }()
 	}
-	waitScanDone()
 
 	targetName := target.LocalName()
 	if targetName == "" {
