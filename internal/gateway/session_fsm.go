@@ -28,8 +28,7 @@ type sessionFSM struct {
 
 	state            sessionState
 	inactivityWindow time.Duration
-	startRetryDelay  time.Duration
-	reconnectDelay   time.Duration
+	bo               backoff
 }
 
 func newSessionFSM(client ble.Client, publisher events.Publisher, logger *log.Logger) *sessionFSM {
@@ -38,14 +37,30 @@ func newSessionFSM(client ble.Client, publisher events.Publisher, logger *log.Lo
 		publisher: publisher,
 		logger:    logger,
 		state:     stateIdle,
-		// Fast detect; ~2x worst observed gap in analysis.
-		inactivityWindow: 1 * time.Second,
-		// Pause before re-scan/reconnect to avoid rapid churn after disconnect/start failures.
-		// Longer delays help the BLE stack settle when the adapter/device reports "Not Connected".
-		startRetryDelay: 5 * time.Second,
-		reconnectDelay:  5 * time.Second,
+		// 3s gives the tape firmware room to pause between notifications without
+		// triggering a spurious disconnect (1s was too tight in practice).
+		inactivityWindow: 3 * time.Second,
+		bo:               newBackoff(2*time.Second, 60*time.Second),
 	}
 }
+
+type backoff struct {
+	base    time.Duration
+	max     time.Duration
+	current time.Duration
+}
+
+func newBackoff(base, max time.Duration) backoff {
+	return backoff{base: base, max: max, current: base}
+}
+
+func (b *backoff) next() time.Duration {
+	d := b.current
+	b.current = min(b.current*2, b.max)
+	return d
+}
+
+func (b *backoff) reset() { b.current = b.base }
 
 func (s *sessionFSM) run(ctx context.Context) error {
 	defer s.publisher.Close(ctx)
@@ -66,18 +81,20 @@ func (s *sessionFSM) run(ctx context.Context) error {
 				s.transition(stateStopping)
 				return ctx.Err()
 			}
-			s.logger.Printf("stream start failed: %v; retrying in %s", err, s.startRetryDelay)
+			delay := s.bo.next()
+			s.logger.Printf("stream start failed: %v; retrying in %s", err, delay)
 			s.transition(stateDisconnected)
 			if err := s.client.Close(); err != nil {
 				s.logger.Printf("closing client after failed start: %v", err)
 			}
-			if err := waitDelay(ctx, s.startRetryDelay); err != nil {
+			if err := waitDelay(ctx, delay); err != nil {
 				s.transition(stateStopping)
 				return err
 			}
 			continue
 		}
 
+		s.bo.reset()
 		s.transition(stateStreaming)
 		lastActivity = time.Now()
 		inactivity := time.NewTimer(s.inactivityWindow)
@@ -151,12 +168,13 @@ func resetTimer(t *time.Timer, d time.Duration) {
 }
 
 func (s *sessionFSM) handleDisconnect(ctx context.Context, reason string) error {
-	s.logger.Printf("connection closed (%s); reconnecting in %s", reason, s.reconnectDelay)
+	delay := s.bo.next()
+	s.logger.Printf("connection closed (%s); reconnecting in %s", reason, delay)
 	s.transition(stateDisconnected)
 	if err := s.client.Close(); err != nil {
 		s.logger.Printf("closing client after disconnect: %v", err)
 	}
-	if err := waitDelay(ctx, s.reconnectDelay); err != nil {
+	if err := waitDelay(ctx, delay); err != nil {
 		s.transition(stateStopping)
 		return err
 	}
