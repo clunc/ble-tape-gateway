@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package measurement.v1;
+
+option go_package = "ble-tape-gateway/internal/measurepb";
+
+message Measurement {
+  string device_id         = 1;
+  double circumference_mm  = 2;
+  int64  timestamp_unix_ms = 3;
+}
