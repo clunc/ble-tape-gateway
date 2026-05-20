@@ -6,6 +6,7 @@ const valueCmEl   = document.getElementById('value-cm');
 const timestampEl = document.getElementById('timestamp');
 const deltaEl     = document.getElementById('delta');
 const logBody     = document.querySelector('#log tbody');
+const latencyEl   = document.getElementById('latency');
 const selectEl    = document.getElementById('body-part');
 const logSection  = document.getElementById('log-section');
 const logBtn      = document.getElementById('log-btn');
@@ -145,6 +146,14 @@ function onMeasurement(m) {
   valueCmEl.textContent   = (mm / 10).toFixed(2);
   timestampEl.textContent = formatTime(m.timestamp_unix_ms);
   renderDelta(diff);
+
+  if (m.server_ms) {
+    const now       = Date.now();
+    const kafka     = m.server_ms - m.timestamp_unix_ms;
+    const sse       = now - m.server_ms;
+    const total     = now - m.timestamp_unix_ms;
+    latencyEl.textContent = `${total}ms  (kafka ${kafka}ms · sse ${sse}ms)`;
+  }
 
   // Sync dropdown if body part changed server-side
   if (bp && selectEl.value !== bp) {

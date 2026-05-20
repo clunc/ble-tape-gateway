@@ -140,6 +140,13 @@ main {
   color: #999;
 }
 
+.latency {
+  font-size: 0.72rem;
+  color: #cbd5e1;
+  margin-top: 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Delta pill */
 .delta-pill {
   font-size: 0.75rem;

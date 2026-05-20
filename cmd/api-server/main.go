@@ -315,6 +315,7 @@ func (h *hub) broadcast(m measurepb.Measurement, bodyPart string) {
 		"body_part":         bodyPart,
 		"circumference_mm":  m.CircumferenceMm,
 		"timestamp_unix_ms": m.TimestampUnixMs,
+		"server_ms":         time.Now().UnixMilli(),
 	})
 	select {
 	case h.msgs <- payload:
