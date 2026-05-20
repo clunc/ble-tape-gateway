@@ -40,8 +40,8 @@ func main() {
 	hub := newHub()
 	go hub.run()
 
-	// Shared, atomically updated body part selection.
-	sel := newSelection(bodyParts[0])
+	// Shared, atomically updated body part selection — persisted in SQLite.
+	sel := newSelection(loadBodyPart(db, bodyParts[0]), db)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -74,10 +74,11 @@ func main() {
 
 type selection struct {
 	ptr unsafe.Pointer // *string, swapped atomically
+	db  *sql.DB
 }
 
-func newSelection(initial string) *selection {
-	s := &selection{}
+func newSelection(initial string, db *sql.DB) *selection {
+	s := &selection{db: db}
 	s.set(initial)
 	return s
 }
@@ -108,6 +109,7 @@ func (s *selection) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.set(req.BodyPart)
+		_, _ = s.db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('body_part', ?)`, req.BodyPart)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -131,9 +133,24 @@ func mustOpenDB(path string, logger *log.Logger) *sql.DB {
 	if err != nil {
 		logger.Fatalf("create table: %v", err)
 	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS settings (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`)
+	if err != nil {
+		logger.Fatalf("create settings table: %v", err)
+	}
 	// Migrate: add body_part if the table pre-dates it.
 	_, _ = db.Exec(`ALTER TABLE measurements ADD COLUMN body_part TEXT NOT NULL DEFAULT ''`)
 	return db
+}
+
+func loadBodyPart(db *sql.DB, fallback string) string {
+	var v string
+	if err := db.QueryRow(`SELECT value FROM settings WHERE key = 'body_part'`).Scan(&v); err != nil || v == "" {
+		return fallback
+	}
+	return v
 }
 
 func insertMeasurement(db *sql.DB, m *measurepb.Measurement, bodyPart string) error {
@@ -321,6 +338,9 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	defer func() { h.unreg <- ch }()
 	flusher.Flush() // send headers immediately so EventSource.onopen fires
 
+	heartbeat := time.NewTicker(25 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case msg, ok := <-ch:
@@ -328,6 +348,9 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			_, _ = w.Write(append(append([]byte("data: "), msg...), '\n', '\n'))
+			flusher.Flush()
+		case <-heartbeat.C:
+			_, _ = w.Write([]byte(": heartbeat\n\n"))
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
