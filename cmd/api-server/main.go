@@ -71,7 +71,16 @@ func main() {
 	mux.HandleFunc("/body-part", sel.handleHTTP)
 	mux.HandleFunc("/measurements/today", handleTodayMeasurements(db))
 	mux.HandleFunc("/measurements/", handleDeleteMeasurement(db))
-	mux.HandleFunc("/measurements", handleSaveMeasurement(db))
+	mux.HandleFunc("/measurements", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleQueryMeasurements(db)(w, r)
+		case http.MethodPost:
+			handleSaveMeasurement(db)(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	mux.Handle("/", http.FileServer(http.Dir("/frontend")))
 
 	srv := &http.Server{Addr: listenAddr, Handler: mux}
@@ -231,6 +240,81 @@ func handleSaveMeasurement(db *sql.DB) http.HandlerFunc {
 		}
 		w.Header().Set("Location", fmt.Sprintf("/measurements/%d", id))
 		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+func handleQueryMeasurements(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+
+		parseDay := func(s string) (int64, error) {
+			if s == "today" {
+				now := time.Now().UTC()
+				return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).UnixMilli(), nil
+			}
+			t, err := time.ParseInLocation("2006-01-02", s, time.UTC)
+			return t.UnixMilli(), err
+		}
+
+		var fromMs, toMs int64
+		var err error
+		if s := q.Get("from"); s != "" {
+			if fromMs, err = parseDay(s); err != nil {
+				http.Error(w, "invalid from date (use YYYY-MM-DD or 'today')", http.StatusBadRequest)
+				return
+			}
+		}
+		if s := q.Get("to"); s != "" {
+			toMs, err = parseDay(s)
+			if err != nil {
+				http.Error(w, "invalid to date (use YYYY-MM-DD or 'today')", http.StatusBadRequest)
+				return
+			}
+			// include the full day
+			toMs += 24*60*60*1000 - 1
+		} else {
+			toMs = (1<<62 - 1) // no upper bound
+		}
+
+		bodyPart := q.Get("body_part")
+
+		var rows *sql.Rows
+		if bodyPart != "" {
+			rows, err = db.QueryContext(r.Context(),
+				`SELECT id, body_part, circumference_mm, recorded_at
+				   FROM measurements
+				  WHERE recorded_at >= ? AND recorded_at <= ? AND body_part = ?
+				  ORDER BY recorded_at ASC LIMIT 1000`,
+				fromMs, toMs, bodyPart)
+		} else {
+			rows, err = db.QueryContext(r.Context(),
+				`SELECT id, body_part, circumference_mm, recorded_at
+				   FROM measurements
+				  WHERE recorded_at >= ? AND recorded_at <= ?
+				  ORDER BY recorded_at ASC LIMIT 1000`,
+				fromMs, toMs)
+		}
+		if err != nil {
+			http.Error(w, "db error", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		type entry struct {
+			ID              int64   `json:"id"`
+			BodyPart        string  `json:"body_part"`
+			CircumferenceMm float64 `json:"circumference_mm"`
+			TimestampUnixMs int64   `json:"timestamp_unix_ms"`
+		}
+		result := []entry{}
+		for rows.Next() {
+			var e entry
+			if err := rows.Scan(&e.ID, &e.BodyPart, &e.CircumferenceMm, &e.TimestampUnixMs); err == nil {
+				result = append(result, e)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
 	}
 }
 
