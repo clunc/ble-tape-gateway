@@ -41,7 +41,7 @@ func newSessionFSM(client ble.Client, publisher events.Publisher, logger *log.Lo
 		// 3s gives the tape firmware room to pause between notifications without
 		// triggering a spurious disconnect (1s was too tight in practice).
 		inactivityWindow: 3 * time.Second,
-		bo:               newBackoff(1*time.Second, 60*time.Second),
+		bo:               newBackoff(200*time.Millisecond, 60*time.Second),
 	}
 }
 
@@ -87,7 +87,7 @@ func (s *sessionFSM) run(ctx context.Context) error {
 			// adapter settle.
 			var delay time.Duration
 			if errors.Is(err, ble.ErrScanTimeout) {
-				delay = 1 * time.Second
+				delay = 200 * time.Millisecond
 			} else {
 				delay = s.bo.next()
 			}

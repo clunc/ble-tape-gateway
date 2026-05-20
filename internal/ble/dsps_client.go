@@ -148,8 +148,6 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	if err != nil {
 		var retErr error
 		if strings.Contains(err.Error(), "le-connection-abort-by-local") {
-			// Reset HCI state so the next attempt starts clean.
-			c.resetAdapter()
 			retErr = fmt.Errorf("%w: connect: %v", ErrScanTimeout, err)
 		} else {
 			retErr = fmt.Errorf("connect to %s: %w", connectName, err)
