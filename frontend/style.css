@@ -36,7 +36,8 @@ nav {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.status.connected    { background: #ecfdf3; color: #166534; }
+.status.live         { background: #ecfdf3; color: #166534; }
+.status.scanning     { background: #fffbeb; color: #92400e; }
 .status.disconnected { background: #fef2f2; color: #b91c1c; }
 
 /* Layout */

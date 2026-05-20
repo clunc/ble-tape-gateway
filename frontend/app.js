@@ -93,9 +93,25 @@ selectEl.addEventListener('change', async () => {
 
 // --- Status ---
 
-function setStatus(connected) {
-  statusEl.textContent = connected ? 'Live' : 'Disconnected';
-  statusEl.className = 'status ' + (connected ? 'connected' : 'disconnected');
+let lastMeasurementAt = 0;
+let statusInterval = null;
+
+function setStatus(state) {
+  const labels = { live: 'Live', scanning: 'Scanning', disconnected: 'Disconnected' };
+  statusEl.textContent = labels[state] ?? state;
+  statusEl.className = 'status ' + state;
+}
+
+function startStatusWatcher() {
+  if (statusInterval) return;
+  statusInterval = setInterval(() => {
+    if (Date.now() - lastMeasurementAt > 1000) setStatus('scanning');
+  }, 500);
+}
+
+function stopStatusWatcher() {
+  clearInterval(statusInterval);
+  statusInterval = null;
 }
 
 // --- Delta ---
@@ -139,6 +155,8 @@ function onMeasurement(m) {
   const prev = lastLoggedByBodyPart.get(bp) ?? null;
   const diff = (mm > 0 && prev !== null) ? mm - prev : null;
 
+  lastMeasurementAt = Date.now();
+  setStatus('live');
   current = { mm, bp, diff, ts: m.timestamp_unix_ms, deviceId: m.device_id };
   logBtn.disabled = false;
 
@@ -167,13 +185,14 @@ function onMeasurement(m) {
 
 function connect() {
   const es = new EventSource('/ws');
-  es.onopen    = () => setStatus(true);
+  es.onopen    = () => { setStatus('scanning'); startStatusWatcher(); };
   es.onmessage = (e) => {
     try { onMeasurement(JSON.parse(e.data)); }
     catch (err) { console.warn('bad message', e.data, err); }
   };
   es.onerror   = () => {
-    setStatus(false);
+    setStatus('disconnected');
+    stopStatusWatcher();
     es.close();
     setTimeout(connect, 1000);
   };
