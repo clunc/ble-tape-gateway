@@ -1,0 +1,79 @@
+services:
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info", "--brokers", "localhost:9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redpanda-init:
+    image: redpandadata/redpanda:latest
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: >
+      rpk topic create measurements
+        --brokers redpanda:9092
+        --partitions 1
+        --replicas 1
+    restart: "no"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      GATEWAY_SIMULATED: "false"
+      GATEWAY_DEVICE_ID: "tape-001"
+      GATEWAY_DEVICE_NAME: "ES-Tape"
+      GATEWAY_DEVICE_MAC: "D0:3E:7D:7A:5A:94"
+      GATEWAY_ACCEPT_LIVE_MEASUREMENTS: "true"
+      GATEWAY_PUBLISH_MODE: "redpanda"
+      GATEWAY_PUBLISH_ENDPOINT: "redpanda:9092"
+      DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/run/dbus/system_bus_socket"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
+    volumes:
+      - /run/dbus:/run/dbus:ro
+    restart: unless-stopped
+
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api-server
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      REDPANDA_BROKER: "redpanda:9092"
+      MEASUREMENTS_TOPIC: "measurements"
+      DB_PATH: "/data/measurements.db"
+      LISTEN_ADDR: ":8080"
+    volumes:
+      - measurements-data:/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  measurements-data:
