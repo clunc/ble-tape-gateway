@@ -26,8 +26,9 @@ logBtn.addEventListener('click', async () => {
   const diff = (mm > 0 && prevLogged !== null) ? mm - prevLogged : null;
   if (mm > 0) lastLoggedByBodyPart.set(bp, mm);
 
+  let savedId = null;
   try {
-    await fetch('/measurements', {
+    const res = await fetch('/measurements', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -37,19 +38,22 @@ logBtn.addEventListener('click', async () => {
         timestamp_unix_ms: ts,
       }),
     });
+    const loc = res.headers.get('Location');
+    if (loc) savedId = loc.split('/').pop();
   } catch (err) {
     console.warn('save failed', err);
   }
 
   const cls = deltaClass(diff);
   const tr  = document.createElement('tr');
+  if (savedId) tr.dataset.id = savedId;
   tr.innerHTML =
     `<td>${formatTime(ts)}</td>` +
     `<td class="body-part">${bp || '—'}</td>` +
     `<td>${mm.toFixed(1)}</td>` +
     `<td class="${cls}">${deltaText(diff)}</td>` +
     `<td><button class="delete-btn" title="Delete">×</button></td>`;
-  tr.querySelector('.delete-btn').addEventListener('click', () => tr.remove());
+  tr.querySelector('.delete-btn').addEventListener('click', () => deleteRow(tr));
   logBody.prepend(tr);
   while (logBody.rows.length > MAX_ROWS) logBody.deleteRow(logBody.rows.length - 1);
 
@@ -57,8 +61,14 @@ logBtn.addEventListener('click', async () => {
   setTimeout(() => { logBtn.textContent = 'Log'; }, 1000);
 });
 
-// --- Log toggle ---
-
+async function deleteRow(tr) {
+  const id = tr.dataset.id;
+  if (id) {
+    try { await fetch(`/measurements/${id}`, { method: 'DELETE' }); }
+    catch (err) { console.warn('delete failed', err); }
+  }
+  tr.remove();
+}
 
 // --- Body part selector ---
 
@@ -212,13 +222,14 @@ async function loadTodayLog() {
 
       const cls = deltaClass(diff);
       const tr  = document.createElement('tr');
+      if (m.id) tr.dataset.id = m.id;
       tr.innerHTML =
         `<td>${formatTime(m.timestamp_unix_ms)}</td>` +
         `<td class="body-part">${bp || '—'}</td>` +
         `<td>${mm.toFixed(1)}</td>` +
         `<td class="${cls}">${deltaText(diff)}</td>` +
         `<td><button class="delete-btn" title="Delete">×</button></td>`;
-      tr.querySelector('.delete-btn').addEventListener('click', () => tr.remove());
+      tr.querySelector('.delete-btn').addEventListener('click', () => deleteRow(tr));
       logBody.appendChild(tr);
     });
   } catch (err) {

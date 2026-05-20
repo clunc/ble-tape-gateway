@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -52,6 +54,7 @@ func main() {
 	mux.HandleFunc("/ws", hub.serveWS)
 	mux.HandleFunc("/body-part", sel.handleHTTP)
 	mux.HandleFunc("/measurements/today", handleTodayMeasurements(db))
+	mux.HandleFunc("/measurements/", handleDeleteMeasurement(db))
 	mux.HandleFunc("/measurements", handleSaveMeasurement(db))
 	mux.Handle("/", http.FileServer(http.Dir("/frontend")))
 
@@ -153,12 +156,35 @@ func loadBodyPart(db *sql.DB, fallback string) string {
 	return v
 }
 
-func insertMeasurement(db *sql.DB, m *measurepb.Measurement, bodyPart string) error {
-	_, err := db.Exec(
+func insertMeasurement(db *sql.DB, m *measurepb.Measurement, bodyPart string) (int64, error) {
+	res, err := db.Exec(
 		`INSERT INTO measurements (device_id, body_part, circumference_mm, recorded_at) VALUES (?, ?, ?, ?)`,
 		m.DeviceId, bodyPart, m.CircumferenceMm, m.TimestampUnixMs,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	return id, nil
+}
+
+func handleDeleteMeasurement(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/measurements/")
+		if id == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		if _, err := db.ExecContext(r.Context(), `DELETE FROM measurements WHERE id = ?`, id); err != nil {
+			http.Error(w, "db error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func handleSaveMeasurement(db *sql.DB) http.HandlerFunc {
@@ -182,11 +208,13 @@ func handleSaveMeasurement(db *sql.DB) http.HandlerFunc {
 			CircumferenceMm: req.CircumferenceMm,
 			TimestampUnixMs: req.TimestampUnixMs,
 		}
-		if err := insertMeasurement(db, m, req.BodyPart); err != nil {
+		id, err := insertMeasurement(db, m, req.BodyPart)
+		if err != nil {
 			http.Error(w, "db error", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Location", fmt.Sprintf("/measurements/%d", id))
+		w.WriteHeader(http.StatusCreated)
 	}
 }
 
@@ -197,7 +225,7 @@ func handleTodayMeasurements(db *sql.DB) http.HandlerFunc {
 		startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).UnixMilli()
 
 		rows, err := db.QueryContext(r.Context(),
-			`SELECT body_part, circumference_mm, recorded_at
+			`SELECT id, body_part, circumference_mm, recorded_at
 			   FROM measurements
 			  WHERE recorded_at >= ?
 			  ORDER BY recorded_at ASC
@@ -211,6 +239,7 @@ func handleTodayMeasurements(db *sql.DB) http.HandlerFunc {
 		defer rows.Close()
 
 		type entry struct {
+			ID              int64   `json:"id"`
 			BodyPart        string  `json:"body_part"`
 			CircumferenceMm float64 `json:"circumference_mm"`
 			TimestampUnixMs int64   `json:"timestamp_unix_ms"`
@@ -218,7 +247,7 @@ func handleTodayMeasurements(db *sql.DB) http.HandlerFunc {
 		result := []entry{}
 		for rows.Next() {
 			var e entry
-			if err := rows.Scan(&e.BodyPart, &e.CircumferenceMm, &e.TimestampUnixMs); err == nil {
+			if err := rows.Scan(&e.ID, &e.BodyPart, &e.CircumferenceMm, &e.TimestampUnixMs); err == nil {
 				result = append(result, e)
 			}
 		}
