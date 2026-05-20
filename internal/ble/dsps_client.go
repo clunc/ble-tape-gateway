@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/godbus/dbus/v5"
 	"tinygo.org/x/bluetooth"
 
 	"ble-tape-gateway/internal/logutil"
@@ -91,6 +92,12 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	adapter := bluetooth.DefaultAdapter
 	// Clear any stale scan left over from a previous attempt.
 	_ = adapter.StopScan()
+	// Remove the device from BlueZ's cache so the next scan fires InterfacesAdded
+	// (BlueZ only fires that signal for unknown devices; cached ones only get a
+	// quiet PropertiesChanged that tinygo/bluetooth's scanner does not catch).
+	if c.deviceMAC != "" {
+		removeBlueZDevice(c.deviceMAC, c.logger)
+	}
 	if err := adapter.Enable(); err != nil {
 		sendStarted(err)
 		hint := ""
@@ -310,6 +317,23 @@ func mustParseUUID(value string) bluetooth.UUID {
 		panic(fmt.Sprintf("invalid UUID %q: %v", value, err))
 	}
 	return uuid
+}
+
+// removeBlueZDevice removes the device from BlueZ's known-devices cache so that
+// the next Scan() call receives an InterfacesAdded signal (BlueZ only fires that
+// for devices it has not seen before; cached devices only emit PropertiesChanged,
+// which tinygo/bluetooth's scanner ignores).
+func removeBlueZDevice(mac string, logger *log.Logger) {
+	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		logger.Printf("dbus connect: %v", err)
+		return
+	}
+	call := conn.Object("org.bluez", "/org/bluez/hci0").Call("org.bluez.Adapter1.RemoveDevice", 0, devPath)
+	if call.Err != nil && !strings.Contains(call.Err.Error(), "Does Not Exist") {
+		logger.Printf("remove cached device %s: %v", mac, call.Err)
+	}
 }
 
 func (c *DSPSClient) logDeviceInfo(result bluetooth.ScanResult, prefix string) {
