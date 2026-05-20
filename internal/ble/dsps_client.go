@@ -28,7 +28,6 @@ type DSPSClient struct {
 	mu             sync.Mutex
 	cancel         context.CancelFunc
 	adapterEnabled bool
-	knownAddress   *bluetooth.Address // set after first scan; allows scan-free reconnects
 }
 
 // NewDSPSClient builds a BLE client that listens for DSPS notifications from the tape measure.
@@ -103,7 +102,6 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	}
 
 	adapter := bluetooth.DefaultAdapter
-	_ = adapter.StopScan()
 	if !c.adapterEnabled {
 		if err := adapter.Enable(); err != nil {
 			sendStarted(err)
@@ -116,107 +114,17 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		c.adapterEnabled = true
 	}
 
-	var connectAddr bluetooth.Address
-	var connectName string
-
-	if c.knownAddress != nil {
-		// Fast reconnect: device is already in BlueZ cache with GATT services intact.
-		// Skipping removeDevice+scan preserves the cache and cuts reconnect time by ~1.7s.
-		connectAddr = *c.knownAddress
-		connectName = c.deviceMAC
-		c.logger.Printf("reconnecting to known device %s (skipping scan)", c.deviceMAC)
-	} else {
-		// First connection: remove cached device so tinygo/bluetooth's scan sees
-		// InterfacesAdded (BlueZ only emits that for unknown devices).
-		if c.deviceMAC != "" {
-			removeBlueZDevice(c.deviceMAC, c.logger)
-		}
-
-		targetDesc := fmt.Sprintf("mac=%s", c.deviceMAC)
-		if c.deviceMAC == "" {
-			targetDesc = fmt.Sprintf("name=%q", c.deviceName)
-		}
-		c.logger.Printf("scanning for device (%s)", targetDesc)
-		foundCh := make(chan bluetooth.ScanResult, 1)
-		scanErr := make(chan error, 1)
-		var stopScan sync.Once
-		stop := func() {
-			stopScan.Do(func() {
-				if err := adapter.StopScan(); err != nil && !strings.Contains(err.Error(), "no scan in progress") {
-					c.logger.Printf("stop scan: %v", err)
-				}
-			})
-		}
-
-		scanDone := make(chan struct{})
-		go func() {
-			defer close(scanDone)
-			if err := adapter.Scan(func(a *bluetooth.Adapter, result bluetooth.ScanResult) {
-				if ctx.Err() != nil {
-					stop()
-					return
-				}
-				if c.deviceMAC != "" {
-					if !strings.EqualFold(result.Address.String(), c.deviceMAC) {
-						return
-					}
-				} else {
-					if !strings.EqualFold(result.LocalName(), c.deviceName) {
-						return
-					}
-					if !result.AdvertisementPayload.HasServiceUUID(parsedDSPSServiceUUID) {
-						return
-					}
-				}
-				select {
-				case foundCh <- result:
-				default:
-				}
-				stop()
-			}); err != nil && ctx.Err() == nil {
-				scanErr <- err
-			}
-		}()
-
-		waitScanDone := func() {
-			select {
-			case <-scanDone:
-			case <-time.After(3 * time.Second):
-				c.logger.Printf("warning: scan goroutine did not exit within 3s")
-			}
-		}
-
-		var target bluetooth.ScanResult
-		select {
-		case <-ctx.Done():
-			stop()
-			waitScanDone()
-			sendStarted(ctx.Err())
-			return ctx.Err()
-		case err := <-scanErr:
-			waitScanDone()
-			sendStarted(err)
-			return fmt.Errorf("scan: %w", err)
-		case <-time.After(10 * time.Second):
-			stop()
-			waitScanDone()
-			err := fmt.Errorf("%w: device not found within 10s", ErrScanTimeout)
-			sendStarted(err)
-			return err
-		case target = <-foundCh:
-			go func() { <-scanDone }()
-		}
-
-		c.logDeviceInfo(target, "found target")
-		connectName = target.LocalName()
-		if connectName == "" {
-			connectName = "(unknown name)"
-		}
-		connectAddr = target.Address
-		c.knownAddress = &connectAddr
+	// Scan using a private D-Bus connection that catches both InterfacesAdded
+	// (devices BlueZ hasn't seen before) and PropertiesChanged (cached devices).
+	// This means RemoveDevice is never called, BlueZ's GATT cache stays intact,
+	// and ServicesResolved fires in milliseconds instead of ~1.7s after a cache wipe.
+	connectAddr, err := c.dbusScan(ctx)
+	if err != nil {
+		sendStarted(err)
+		return err
 	}
-
-	c.logger.Printf("connecting to %s (%s)", connectName, connectAddr.String())
+	connectName := connectAddr.String()
+	c.logger.Printf("connecting to %s", connectName)
 
 	disconnected := make(chan struct{}, 1)
 	adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
@@ -234,12 +142,11 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 
 	client, err := adapter.Connect(connectAddr, bluetooth.ConnectionParams{})
 	if err != nil {
-		c.knownAddress = nil // force full scan next time if direct connect failed
 		sendStarted(err)
 		return fmt.Errorf("connect to %s: %w", connectName, err)
 	}
 	defer client.Disconnect()
-	c.logger.Printf("connected to %s", connectAddr.String())
+	c.logger.Printf("connected to %s", connectName)
 
 	services, err := client.DiscoverServices([]bluetooth.UUID{parsedDSPSServiceUUID})
 	if err != nil {
@@ -311,6 +218,160 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	}
 }
 
+// dbusScan waits for the target device to appear in BlueZ's object manager using
+// a private D-Bus connection. It listens for both InterfacesAdded (devices BlueZ
+// hasn't seen before) and PropertiesChanged (devices already cached in BlueZ),
+// so RemoveDevice is never needed and the GATT cache stays intact across reconnects.
+func (c *DSPSClient) dbusScan(ctx context.Context) (bluetooth.Address, error) {
+	conn, err := dbus.SystemBusPrivate()
+	if err != nil {
+		return bluetooth.Address{}, fmt.Errorf("dbus private: %w", err)
+	}
+	defer conn.Close()
+	if err := conn.Auth(nil); err != nil {
+		return bluetooth.Address{}, fmt.Errorf("dbus auth: %w", err)
+	}
+	if err := conn.Hello(); err != nil {
+		return bluetooth.Address{}, fmt.Errorf("dbus hello: %w", err)
+	}
+
+	targetPath := ""
+	if c.deviceMAC != "" {
+		targetPath = "/org/bluez/hci0/dev_" + strings.ReplaceAll(c.deviceMAC, ":", "_")
+		c.logger.Printf("scanning for device (mac=%s)", c.deviceMAC)
+	} else {
+		c.logger.Printf("scanning for device (name=%q)", c.deviceName)
+	}
+
+	// Register for signals before starting discovery to avoid missing events.
+	signals := make(chan *dbus.Signal, 32)
+	conn.Signal(signals)
+	conn.AddMatchSignal(
+		dbus.WithMatchSender("org.bluez"),
+		dbus.WithMatchInterface("org.freedesktop.DBus.ObjectManager"),
+		dbus.WithMatchMember("InterfacesAdded"),
+	)
+	conn.AddMatchSignal(
+		dbus.WithMatchSender("org.bluez"),
+		dbus.WithMatchInterface("org.freedesktop.DBus.Properties"),
+		dbus.WithMatchMember("PropertiesChanged"),
+	)
+
+	// If the device is already present in BlueZ's object manager, return immediately.
+	if targetPath != "" {
+		obj := conn.Object("org.bluez", dbus.ObjectPath(targetPath))
+		if _, err := obj.GetProperty("org.bluez.Device1.Address"); err == nil {
+			c.logger.Printf("device already in BlueZ cache, skipping scan")
+			return addrFromDevicePath(targetPath)
+		}
+	}
+
+	adapterObj := conn.Object("org.bluez", "/org/bluez/hci0")
+	if call := adapterObj.Call("org.bluez.Adapter1.StartDiscovery", 0); call.Err != nil {
+		if !strings.Contains(call.Err.Error(), "Already discovering") {
+			return bluetooth.Address{}, fmt.Errorf("start discovery: %w", call.Err)
+		}
+	}
+	defer func() {
+		if call := adapterObj.Call("org.bluez.Adapter1.StopDiscovery", 0); call.Err != nil {
+			if !strings.Contains(call.Err.Error(), "No discovery started") {
+				c.logger.Printf("stop discovery: %v", call.Err)
+			}
+		}
+	}()
+
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case sig := <-signals:
+			if sig == nil {
+				continue
+			}
+			path, ok := c.matchScanSignal(sig, targetPath)
+			if !ok {
+				continue
+			}
+			addr, err := addrFromDevicePath(string(path))
+			if err != nil {
+				c.logger.Printf("parse device path %s: %v", path, err)
+				continue
+			}
+			c.logger.Printf("found device (mac=%s)", addr.String())
+			return addr, nil
+		case <-timeout.C:
+			return bluetooth.Address{}, fmt.Errorf("%w: device not found within 10s", ErrScanTimeout)
+		case <-ctx.Done():
+			return bluetooth.Address{}, ctx.Err()
+		}
+	}
+}
+
+// matchScanSignal returns the device path if the signal matches our target.
+func (c *DSPSClient) matchScanSignal(sig *dbus.Signal, targetPath string) (dbus.ObjectPath, bool) {
+	switch sig.Name {
+	case "org.freedesktop.DBus.ObjectManager.InterfacesAdded":
+		if len(sig.Body) < 2 {
+			return "", false
+		}
+		path, ok := sig.Body[0].(dbus.ObjectPath)
+		if !ok || !strings.HasPrefix(string(path), "/org/bluez/hci0/dev_") {
+			return "", false
+		}
+		if targetPath != "" {
+			return path, string(path) == targetPath
+		}
+		// Name-based: check device properties in the signal body.
+		ifaces, ok := sig.Body[1].(map[string]map[string]dbus.Variant)
+		if !ok {
+			return "", false
+		}
+		devProps := ifaces["org.bluez.Device1"]
+		name, _ := devProps["Name"].Value().(string)
+		if !strings.EqualFold(name, c.deviceName) {
+			return "", false
+		}
+		uuids, _ := devProps["UUIDs"].Value().([]string)
+		for _, u := range uuids {
+			if strings.EqualFold(u, dspsServiceUUID) {
+				return path, true
+			}
+		}
+		return "", false
+
+	case "org.freedesktop.DBus.Properties.PropertiesChanged":
+		if len(sig.Body) < 1 {
+			return "", false
+		}
+		iface, _ := sig.Body[0].(string)
+		if iface != "org.bluez.Device1" {
+			return "", false
+		}
+		path := sig.Path
+		if !strings.HasPrefix(string(path), "/org/bluez/hci0/dev_") {
+			return "", false
+		}
+		if targetPath != "" {
+			return path, string(path) == targetPath
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// addrFromDevicePath parses a bluetooth.Address from a BlueZ device object path
+// of the form /org/bluez/hci0/dev_D0_3E_7D_7A_5A_94.
+func addrFromDevicePath(path string) (bluetooth.Address, error) {
+	suffix := strings.TrimPrefix(path, "/org/bluez/hci0/dev_")
+	macStr := strings.ReplaceAll(suffix, "_", ":")
+	mac, err := bluetooth.ParseMAC(macStr)
+	if err != nil {
+		return bluetooth.Address{}, fmt.Errorf("parse MAC %q: %w", macStr, err)
+	}
+	return bluetooth.Address{MACAddress: bluetooth.MACAddress{MAC: mac}}, nil
+}
+
 // Close cancels an active stream.
 func (c *DSPSClient) Close() error {
 	c.mu.Lock()
@@ -350,12 +411,8 @@ func mustParseUUID(value string) bluetooth.UUID {
 	return uuid
 }
 
-// removeBlueZDevice removes the device from BlueZ's known-devices cache so that
-// the next Scan() call receives an InterfacesAdded signal (BlueZ only fires that
-// for devices it has not seen before; cached devices only emit PropertiesChanged,
-// which tinygo/bluetooth's scanner ignores).
-// Uses a private D-Bus connection to avoid interfering with the shared connection
-// that tinygo/bluetooth uses internally for its own scan state.
+// removeBlueZDevice removes the device from BlueZ's cache. Kept as a debugging
+// helper; it is no longer called in normal operation (see dbusScan).
 func removeBlueZDevice(mac string, logger *log.Logger) {
 	conn, err := dbus.SystemBusPrivate()
 	if err != nil {
@@ -376,13 +433,4 @@ func removeBlueZDevice(mac string, logger *log.Logger) {
 	if call.Err != nil && !strings.Contains(call.Err.Error(), "Does Not Exist") {
 		logger.Printf("remove cached device %s: %v", mac, call.Err)
 	}
-}
-
-func (c *DSPSClient) logDeviceInfo(result bluetooth.ScanResult, prefix string) {
-	services := result.AdvertisementPayload.ServiceUUIDs()
-	serviceStrings := make([]string, 0, len(services))
-	for _, s := range services {
-		serviceStrings = append(serviceStrings, strings.ToUpper(s.String()))
-	}
-	c.logger.Printf("%s: name=%q mac=%s rssi=%d services=%v", prefix, result.LocalName(), result.Address.String(), result.RSSI, serviceStrings)
 }
