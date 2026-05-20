@@ -25,7 +25,23 @@ import (
 )
 
 var bodyParts = []string{
-	"Waist", "Chest", "Hips", "Thigh", "Calf", "Upper Arm", "Neck", "Wrist",
+	// Torso
+	"Neck",
+	"Shoulders",
+	"Chest",
+	"Waist",
+	"Abdomen",
+	"Hips",
+	// Arms (bilateral)
+	"Left Upper Arm", "Right Upper Arm",
+	"Left Upper Arm Flexed", "Right Upper Arm Flexed",
+	"Left Forearm", "Right Forearm",
+	// Frame anchors (static — used for McCallum / Adonis Index scaling)
+	"Left Wrist", "Right Wrist",
+	"Left Ankle", "Right Ankle",
+	// Legs (bilateral)
+	"Left Mid Thigh", "Right Mid Thigh",
+	"Left Calf", "Right Calf",
 }
 
 func main() {
