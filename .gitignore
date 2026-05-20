@@ -40,3 +40,10 @@ go.work.sum
 # Analysis artifacts
 analysis/data/*
 !analysis/data/.gitkeep
+
+# Local compose data volume
+data/
+
+# Root-level compiled binaries (built by go build / docker)
+/api-server
+/gateway
