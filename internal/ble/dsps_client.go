@@ -87,6 +87,12 @@ var (
 )
 
 func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, errs chan<- error, started chan<- error) error {
+	// Derive a context we cancel on return so the notification callback always
+	// sees ctx.Done() before the measurements channel is closed, preventing a
+	// panic from sending on a closed channel.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	sendStarted := func(err error) {
 		if started != nil {
 			started <- err
