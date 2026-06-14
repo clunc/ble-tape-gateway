@@ -16,6 +16,17 @@ import (
 	"ble-tape-gateway/internal/logutil"
 )
 
+// adapterID is the BlueZ adapter (hci0 default; BLE_ADAPTER overrides, e.g. hci1).
+func adapterID() string {
+	if id := os.Getenv("BLE_ADAPTER"); id != "" {
+		return id
+	}
+	return "hci0"
+}
+
+func adapterPath() string   { return "/org/bluez/" + adapterID() }  // /org/bluez/hciN
+func devPathPrefix() string { return adapterPath() + "/dev_" }      // /org/bluez/hciN/dev_
+
 // DSPSClient connects to the Renpho RF-BMF01 tape measure over Dialog's DSPS service.
 // It subscribes to notifications and decodes them into Measurement structs.
 type DSPSClient struct {
@@ -102,6 +113,9 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	}
 
 	adapter := bluetooth.DefaultAdapter
+	if id := os.Getenv("BLE_ADAPTER"); id != "" {
+		adapter = bluetooth.NewAdapter(id)
+	}
 	if !c.adapterEnabled {
 		if err := adapter.Enable(); err != nil {
 			sendStarted(err)
@@ -256,7 +270,7 @@ func (c *DSPSClient) dbusScan(ctx context.Context) (bluetooth.Address, error) {
 
 	targetPath := ""
 	if c.deviceMAC != "" {
-		targetPath = "/org/bluez/hci0/dev_" + strings.ReplaceAll(c.deviceMAC, ":", "_")
+		targetPath = devPathPrefix() + strings.ReplaceAll(c.deviceMAC, ":", "_")
 		c.logger.Printf("scanning for device (mac=%s)", c.deviceMAC)
 	} else {
 		c.logger.Printf("scanning for device (name=%q)", c.deviceName)
@@ -276,7 +290,7 @@ func (c *DSPSClient) dbusScan(ctx context.Context) (bluetooth.Address, error) {
 		dbus.WithMatchMember("PropertiesChanged"),
 	)
 
-	adapterObj := conn.Object("org.bluez", "/org/bluez/hci0")
+	adapterObj := conn.Object("org.bluez", dbus.ObjectPath(adapterPath()))
 	if call := adapterObj.Call("org.bluez.Adapter1.StartDiscovery", 0); call.Err != nil {
 		if !strings.Contains(call.Err.Error(), "Already discovering") {
 			return bluetooth.Address{}, fmt.Errorf("start discovery: %w", call.Err)
@@ -326,7 +340,7 @@ func (c *DSPSClient) matchScanSignal(sig *dbus.Signal, targetPath string) (dbus.
 			return "", false
 		}
 		path, ok := sig.Body[0].(dbus.ObjectPath)
-		if !ok || !strings.HasPrefix(string(path), "/org/bluez/hci0/dev_") {
+		if !ok || !strings.HasPrefix(string(path), devPathPrefix()) {
 			return "", false
 		}
 		if targetPath != "" {
@@ -359,7 +373,7 @@ func (c *DSPSClient) matchScanSignal(sig *dbus.Signal, targetPath string) (dbus.
 			return "", false
 		}
 		path := sig.Path
-		if !strings.HasPrefix(string(path), "/org/bluez/hci0/dev_") {
+		if !strings.HasPrefix(string(path), devPathPrefix()) {
 			return "", false
 		}
 		if targetPath != "" {
@@ -373,7 +387,7 @@ func (c *DSPSClient) matchScanSignal(sig *dbus.Signal, targetPath string) (dbus.
 // addrFromDevicePath parses a bluetooth.Address from a BlueZ device object path
 // of the form /org/bluez/hci0/dev_D0_3E_7D_7A_5A_94.
 func addrFromDevicePath(path string) (bluetooth.Address, error) {
-	suffix := strings.TrimPrefix(path, "/org/bluez/hci0/dev_")
+	suffix := strings.TrimPrefix(path, devPathPrefix())
 	macStr := strings.ReplaceAll(suffix, "_", ":")
 	mac, err := bluetooth.ParseMAC(macStr)
 	if err != nil {
@@ -439,7 +453,7 @@ func (c *DSPSClient) resetAdapter() {
 	if err := conn.Hello(); err != nil {
 		return
 	}
-	adapterObj := conn.Object("org.bluez", "/org/bluez/hci0")
+	adapterObj := conn.Object("org.bluez", dbus.ObjectPath(adapterPath()))
 	adapterObj.Call("org.freedesktop.DBus.Properties.Set", 0,
 		"org.bluez.Adapter1", "Powered", dbus.MakeVariant(false))
 	time.Sleep(1 * time.Second)
@@ -464,7 +478,7 @@ func abortBluezConnect(mac string, logger *log.Logger) {
 	if err := conn.Hello(); err != nil {
 		return
 	}
-	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
+	devPath := dbus.ObjectPath(devPathPrefix() + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
 	call := conn.Object("org.bluez", devPath).Call("org.bluez.Device1.Disconnect", 0)
 	if call.Err != nil && !strings.Contains(call.Err.Error(), "not connected") {
 		logger.Printf("abort connect %s: %v", mac, call.Err)
@@ -488,8 +502,8 @@ func removeBlueZDevice(mac string, logger *log.Logger) {
 		logger.Printf("dbus hello: %v", err)
 		return
 	}
-	devPath := dbus.ObjectPath("/org/bluez/hci0/dev_" + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
-	call := conn.Object("org.bluez", "/org/bluez/hci0").Call("org.bluez.Adapter1.RemoveDevice", 0, devPath)
+	devPath := dbus.ObjectPath(devPathPrefix() + strings.ReplaceAll(strings.ToUpper(mac), ":", "_"))
+	call := conn.Object("org.bluez", dbus.ObjectPath(adapterPath())).Call("org.bluez.Adapter1.RemoveDevice", 0, devPath)
 	if call.Err != nil && !strings.Contains(call.Err.Error(), "Does Not Exist") {
 		logger.Printf("remove cached device %s: %v", mac, call.Err)
 	}
