@@ -38,6 +38,7 @@ type DSPSClient struct {
 
 	mu             sync.Mutex
 	cancel         context.CancelFunc
+	adapter        *bluetooth.Adapter // created once, reused across sessions
 	adapterEnabled bool
 }
 
@@ -112,10 +113,17 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		}
 	}
 
-	adapter := bluetooth.DefaultAdapter
-	if id := os.Getenv("BLE_ADAPTER"); id != "" {
-		adapter = bluetooth.NewAdapter(id)
+	// Select the adapter ONCE and reuse it. NewAdapter() returns a fresh struct
+	// each call, so re-creating it per session and only Enable()-ing the first
+	// would leave later sessions with an un-enabled adapter -> nil panic in
+	// Connect. Cache it on the client.
+	if c.adapter == nil {
+		c.adapter = bluetooth.DefaultAdapter
+		if id := os.Getenv("BLE_ADAPTER"); id != "" {
+			c.adapter = bluetooth.NewAdapter(id)
+		}
 	}
+	adapter := c.adapter
 	if !c.adapterEnabled {
 		if err := adapter.Enable(); err != nil {
 			sendStarted(err)
