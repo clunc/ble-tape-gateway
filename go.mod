@@ -3,6 +3,7 @@ module ble-tape-gateway
 go 1.25.0
 
 require (
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/twmb/franz-go v1.21.2
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.50.1
@@ -12,7 +13,6 @@ require (
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

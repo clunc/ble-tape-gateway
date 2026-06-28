@@ -16,12 +16,11 @@ import (
 	"ble-tape-gateway/internal/logutil"
 )
 
-// adapterID is the BlueZ adapter (hci0 default; BLE_ADAPTER overrides, e.g. hci1).
+// adapterID is the BlueZ adapter to use. Delegates to resolveAdapter (auto-detect;
+// prefers $BLE_ADAPTER if present, else first available — survives hci0/hci1
+// re-enumeration across reboots).
 func adapterID() string {
-	if id := os.Getenv("BLE_ADAPTER"); id != "" {
-		return id
-	}
-	return "hci0"
+	return resolveAdapter()
 }
 
 func adapterPath() string   { return "/org/bluez/" + adapterID() }  // /org/bluez/hciN
@@ -118,10 +117,7 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	// would leave later sessions with an un-enabled adapter -> nil panic in
 	// Connect. Cache it on the client.
 	if c.adapter == nil {
-		c.adapter = bluetooth.DefaultAdapter
-		if id := os.Getenv("BLE_ADAPTER"); id != "" {
-			c.adapter = bluetooth.NewAdapter(id)
-		}
+		c.adapter = bluetooth.NewAdapter(adapterID())
 	}
 	adapter := c.adapter
 	if !c.adapterEnabled {
