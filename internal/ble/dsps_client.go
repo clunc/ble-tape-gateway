@@ -136,7 +136,11 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	// (devices BlueZ hasn't seen before) and PropertiesChanged (cached devices).
 	// This means RemoveDevice is never called, BlueZ's GATT cache stays intact,
 	// and ServicesResolved fires in milliseconds instead of ~1.7s after a cache wipe.
+	// Hold the shared BLE-scan lock only for the discovery phase so we don't
+	// collide with the other gateways' scans on the shared adapter.
+	releaseScan := acquireScanLock(ctx)
 	connectAddr, err := c.dbusScan(ctx)
+	releaseScan()
 	if err != nil {
 		sendStarted(err)
 		return err
