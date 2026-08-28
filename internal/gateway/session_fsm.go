@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -41,7 +40,7 @@ func newSessionFSM(client ble.Client, publisher events.Publisher, logger *log.Lo
 		// 3s gives the tape firmware room to pause between notifications without
 		// triggering a spurious disconnect (1s was too tight in practice).
 		inactivityWindow: 3 * time.Second,
-		bo:               newBackoff(200*time.Millisecond, 60*time.Second),
+		bo:               newBackoff(2*time.Second, 60*time.Second),
 	}
 }
 
@@ -82,15 +81,9 @@ func (s *sessionFSM) run(ctx context.Context) error {
 				s.transition(stateStopping)
 				return ctx.Err()
 			}
-			// Scan timeout just means the tape isn't advertising yet — retry
-			// quickly. Real BLE errors use exponential backoff to let the
-			// adapter settle.
-			var delay time.Duration
-			if errors.Is(err, ble.ErrScanTimeout) {
-				delay = 200 * time.Millisecond
-			} else {
-				delay = s.bo.next()
-			}
+			// Scan timeout means the tape is not advertising yet. Back off here
+			// too so other BLE gateways can use the shared adapter between tries.
+			delay := s.bo.next()
 			s.logger.Printf("stream start failed: %v; retrying in %s", err, delay)
 			s.transition(stateDisconnected)
 			if err := s.client.Close(); err != nil {
