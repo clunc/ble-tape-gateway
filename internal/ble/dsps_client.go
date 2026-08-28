@@ -23,8 +23,8 @@ func adapterID() string {
 	return resolveAdapter()
 }
 
-func adapterPath() string   { return "/org/bluez/" + adapterID() }  // /org/bluez/hciN
-func devPathPrefix() string { return adapterPath() + "/dev_" }      // /org/bluez/hciN/dev_
+func adapterPath() string   { return "/org/bluez/" + adapterID() } // /org/bluez/hciN
+func devPathPrefix() string { return adapterPath() + "/dev_" }     // /org/bluez/hciN/dev_
 
 // DSPSClient connects to the Renpho RF-BMF01 tape measure over Dialog's DSPS service.
 // It subscribes to notifications and decodes them into Measurement structs.
@@ -136,11 +136,18 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 	// (devices BlueZ hasn't seen before) and PropertiesChanged (cached devices).
 	// This means RemoveDevice is never called, BlueZ's GATT cache stays intact,
 	// and ServicesResolved fires in milliseconds instead of ~1.7s after a cache wipe.
-	// Hold the shared BLE-scan lock only for the discovery phase so we don't
-	// collide with the other gateways' scans on the shared adapter.
+	// Hold the shared BLE lock through discovery and connection setup. BlueZ can
+	// abort LE connects if another process restarts discovery during Connect().
 	releaseScan := acquireScanLock(ctx)
+	releaseScanIfHeld := func() {
+		if releaseScan != nil {
+			releaseScan()
+			releaseScan = nil
+		}
+	}
+	defer releaseScanIfHeld()
+
 	connectAddr, err := c.dbusScan(ctx)
-	releaseScan()
 	if err != nil {
 		sendStarted(err)
 		return err
@@ -249,6 +256,7 @@ func (c *DSPSClient) run(ctx context.Context, measurements chan<- Measurement, e
 		return retErr
 	}
 	sendStarted(nil)
+	releaseScanIfHeld()
 	c.logger.Printf("subscribed for notifications on %s", dspsNotifyCharUUID)
 
 	select {
