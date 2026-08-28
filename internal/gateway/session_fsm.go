@@ -40,7 +40,7 @@ func newSessionFSM(client ble.Client, publisher events.Publisher, logger *log.Lo
 		// 3s gives the tape firmware room to pause between notifications without
 		// triggering a spurious disconnect (1s was too tight in practice).
 		inactivityWindow: 3 * time.Second,
-		bo:               newBackoff(2*time.Second, 60*time.Second),
+		bo:               newBackoff(2*time.Second, 20*time.Second),
 	}
 }
 
