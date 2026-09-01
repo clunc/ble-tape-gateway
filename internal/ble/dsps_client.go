@@ -80,8 +80,18 @@ func (c *DSPSClient) Stream(ctx context.Context) (<-chan Measurement, <-chan err
 		}
 	}()
 
-	if err := <-started; err != nil {
-		return nil, nil, err
+	select {
+	case err := <-started:
+		if err != nil {
+			return nil, nil, err
+		}
+	case <-time.After(55 * time.Second):
+		cancel()
+		c.logger.Printf("stream start watchdog expired after 55s; exiting to reset BLE connection state")
+		os.Exit(1)
+	case <-ctx.Done():
+		cancel()
+		return nil, nil, ctx.Err()
 	}
 
 	return measurements, errs, nil
