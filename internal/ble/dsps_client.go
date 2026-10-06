@@ -319,7 +319,7 @@ func (c *DSPSClient) dbusScan(ctx context.Context) (bluetooth.Address, error) {
 	adapterObj := conn.Object("org.bluez", dbus.ObjectPath(adapterPath()))
 	if call := adapterObj.Call("org.bluez.Adapter1.StartDiscovery", 0); call.Err != nil {
 		if !strings.Contains(call.Err.Error(), "Already discovering") {
-			return bluetooth.Address{}, fmt.Errorf("start discovery: %w", call.Err)
+			return bluetooth.Address{}, fmt.Errorf("start discovery on %s: %w", adapterPath(), classifyAdapterError(call.Err))
 		}
 	}
 	defer func() {

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -80,6 +81,10 @@ func (s *sessionFSM) run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				s.transition(stateStopping)
 				return ctx.Err()
+			}
+			if errors.Is(err, ble.ErrAdapterUnavailable) {
+				s.transition(stateStopping)
+				return fmt.Errorf("restart required to rediscover Bluetooth adapter: %w", err)
 			}
 			// Scan timeout means the tape is not advertising yet. Back off here
 			// too so other BLE gateways can use the shared adapter between tries.

@@ -1,6 +1,8 @@
 package ble
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -68,4 +70,31 @@ func adapterInList(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// ErrAdapterUnavailable requires a process restart: both the selected BlueZ
+// object path and the TinyGo adapter are cached for the lifetime of the client.
+// A USB reset can remove that object and register the controller as a new hciN.
+var ErrAdapterUnavailable = errors.New("BLE adapter unavailable")
+
+func classifyAdapterError(err error) error {
+	var value dbus.Error
+	var pointer *dbus.Error
+	var name string
+	switch {
+	case errors.As(err, &value):
+		name = value.Name
+	case errors.As(err, &pointer):
+		name = pointer.Name
+	}
+	switch name {
+	case "org.freedesktop.DBus.Error.UnknownObject",
+		"org.freedesktop.DBus.Error.UnknownMethod",
+		"org.freedesktop.DBus.Error.UnknownInterface",
+		"org.freedesktop.DBus.Error.ServiceUnknown",
+		"org.freedesktop.DBus.Error.NameHasNoOwner":
+		return fmt.Errorf("%w: %w", ErrAdapterUnavailable, err)
+	default:
+		return err
+	}
 }
